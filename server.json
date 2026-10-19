@@ -1,6 +1,6 @@
 {
   "name": "io.github.hughhan1/mysql",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MySQL statements and transactions over MCP",
   "packages": [
     {
@@ -19,9 +19,49 @@
         {
           "name": "CLOUD_SQL_INSTANCE",
           "description": "Optional Cloud SQL project:region:instance; connects through its private IP."
+        },
+        {
+          "name": "TRANSACTION_TIMEOUT",
+          "description": "Maximum MCP transaction-handle lifetime in positive seconds; defaults to 30."
+        },
+        {
+          "name": "TRANSACTION_IDLE_TIMEOUT",
+          "description": "MCP transaction-handle idle timeout in positive seconds; defaults to 10. Independent of MySQL wait_timeout."
+        },
+        {
+          "name": "WAIT_TIMEOUT",
+          "description": "Optional MySQL session wait_timeout in seconds; otherwise uses the server setting."
+        },
+        {
+          "name": "INNODB_LOCK_WAIT_TIMEOUT",
+          "description": "Optional MySQL session innodb_lock_wait_timeout in seconds; otherwise uses the server setting."
+        },
+        {
+          "name": "CONNECT_TIMEOUT",
+          "description": "Optional PyMySQL connect_timeout in seconds; otherwise uses the driver default."
+        },
+        {
+          "name": "READ_TIMEOUT",
+          "description": "Optional PyMySQL read_timeout in seconds; otherwise uses the driver default."
+        },
+        {
+          "name": "WRITE_TIMEOUT",
+          "description": "Optional PyMySQL write_timeout in seconds; otherwise uses the driver default."
+        },
+        {
+          "name": "POOL_SIZE",
+          "description": "Optional SQLAlchemy pool_size; otherwise uses the library default."
+        },
+        {
+          "name": "MAX_OVERFLOW",
+          "description": "Optional SQLAlchemy max_overflow; otherwise uses the library default."
+        },
+        {
+          "name": "POOL_TIMEOUT",
+          "description": "Optional SQLAlchemy pool_timeout in seconds; otherwise uses the library default."
         }
       ],
-      "identifier": "ghcr.io/hughhan1/mysql:0.1.0"
+      "identifier": "ghcr.io/hughhan1/mysql:0.1.1"
     }
   ],
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",

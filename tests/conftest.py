@@ -1,12 +1,19 @@
 import os
 import time
+from contextlib import AsyncExitStack
 from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx2
 import pytest
-from hosting import hosted
+from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
 from sqlalchemy import MetaData, create_engine, pool, text
 from sqlalchemy.engine import make_url
+
+from internal import database as db
+from internal import transactions
+from server import server
 
 SCHEMA = (
     """
@@ -26,7 +33,6 @@ CREATE TABLE item_details (
     status ENUM('PENDING','ACTIVE') NOT NULL,
     label VARCHAR(200) NOT NULL,
     fallback_label VARCHAR(254) NOT NULL,
-    description TEXT NOT NULL,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
 )
@@ -60,6 +66,7 @@ async def database(monkeypatch, database_url):
     monkeypatch.setenv(
         "DATABASE_URL", database_url.render_as_string(hide_password=False)
     )
+    monkeypatch.setenv("INNODB_LOCK_WAIT_TIMEOUT", "1")
     engine = create_engine(database_url, poolclass=pool.NullPool)
     with engine.begin() as connection:
         for statement in SCHEMA:
@@ -74,18 +81,30 @@ async def database(monkeypatch, database_url):
 
 
 @pytest.fixture
-async def providers(database):
-    async with hosted():
-        yield
+async def clients(database):
+    app = server.streamable_http_app(stateless_http=True)
+    async with app.router.lifespan_context(app), AsyncExitStack() as stack:
+        clients = []
+        for _ in range(2):
+            http = await stack.enter_async_context(
+                httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app))
+            )
+            clients.append(
+                await stack.enter_async_context(
+                    Client(
+                        streamable_http_client(
+                            "http://localhost:8000/mcp", http_client=http
+                        )
+                    )
+                )
+            )
+        yield clients
 
 
 @pytest.fixture
 def clock(monkeypatch):
-    import database
-    import transactions
-
     clock = SimpleNamespace(now=time.monotonic())
     timer = SimpleNamespace(monotonic=lambda: clock.now)
-    monkeypatch.setattr(database, "time", timer)
+    monkeypatch.setattr(db, "time", timer)
     monkeypatch.setattr(transactions, "time", timer)
     return clock

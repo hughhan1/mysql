@@ -2,7 +2,7 @@ import operator
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Final
 
 from mcp.server.mcpserver.exceptions import ToolError
 from sqlalchemy import (
@@ -23,7 +23,7 @@ from sqlalchemy.dialects.mysql import Insert, insert
 from sqlalchemy.sql.expression import ColumnClause, TextClause
 from sqlalchemy.types import DateTime
 
-from contract import (
+from internal.contract import (
     ColumnRef,
     Condition,
     Expression,
@@ -40,7 +40,7 @@ from contract import (
 type Column = ColumnClause[Any]
 type Resolve = Callable[[str], Table]
 
-COMPARISONS: dict[str, Callable[[Any, Any], ColumnElement[bool]]] = {
+COMPARISONS: Final[dict[str, Callable[[Any, Any], ColumnElement[bool]]]] = {
     "eq": operator.eq,
     "ne": operator.ne,
     "lt": operator.lt,

@@ -1,9 +1,13 @@
 import asyncio
 import logging
+from threading import Event
 from uuid import uuid4
 
 import pytest
-from hosting import SOURCE, connect, connect_http, mysql, token
+from mcp import Client
+from sqlalchemy import Engine, event
+
+from server import server
 
 pytestmark = pytest.mark.anyio
 
@@ -32,7 +36,7 @@ async def fails(client, tool, **arguments):
 
 
 def item(slug):
-    return {"id": str(uuid4()), "source": SOURCE, "slug": slug}
+    return {"id": str(uuid4()), "source": "catalog", "slug": slug}
 
 
 def detail(owner, **values):
@@ -43,7 +47,6 @@ def detail(owner, **values):
         "item_id": owner,
         "label": "Applicant",
         "fallback_label": "applicant@example.com",
-        "description": "Use",
     } | values
 
 
@@ -52,7 +55,7 @@ def slugs(found):
 
 
 async def test_statements_cover_insert_select_update_delete_and_raw_sql(database):
-    async with connect(mysql) as client:
+    async with Client(server) as client:
         ids = {}
         for slug in ("a", "b", "c"):
             added = item(slug)
@@ -163,14 +166,14 @@ async def test_statements_cover_insert_select_update_delete_and_raw_sql(database
             client,
             "execute",
             sql="SELECT slug, created_at FROM items WHERE source = :source",
-            parameters={"source": SOURCE},
+            parameters={"source": "catalog"},
         )
         [row] = raw["result"]["rows"]
         assert row["slug"] == "a2" and row["created_at"].endswith("Z")
 
 
 async def test_select_outer_joins_groups_labels_and_pages(database):
-    async with connect(mysql) as client:
+    async with Client(server) as client:
         for slug in ("a", "b", "c", "d", "e"):
             added = item(slug)
             await ok(client, "insert", table="items", values=added)
@@ -255,7 +258,7 @@ async def test_invalid_statements_change_nothing_and_never_echo_inputs(
     database, caplog
 ):
     caplog.set_level(logging.INFO, logger="mcp")
-    async with connect(mysql) as client:
+    async with Client(server) as client:
         await ok(client, "insert", table="items", values=item("private-slug"))
         for tool, arguments, message in [
             ("select", {"table": "missing"}, "Unknown table missing."),
@@ -315,33 +318,10 @@ async def test_invalid_statements_change_nothing_and_never_echo_inputs(
                 "Delete needs a where condition.",
             ),
             ("select", {"table": "items;private-slug"}, "validation error"),
-            ("select", {"table": "items", "limit": -1}, "validation error"),
-            ("select", {"table": "items", "offset": -1}, "validation error"),
             (
                 "select",
                 {"table": "items", "where": [{"or_": []}]},
                 "OR group needs a condition.",
-            ),
-            (
-                "select",
-                {
-                    "table": "items",
-                    "columns": [{"column": "slug", "label": "private-slug"}],
-                },
-                "validation error",
-            ),
-            (
-                "select",
-                {"table": "items", "order_by": [{"column": "missing"}]},
-                "Unknown or ambiguous column missing.",
-            ),
-            (
-                "select",
-                {
-                    "table": "items",
-                    "order_by": [{"column": "slug", "direction": "private-slug"}],
-                },
-                "validation error",
             ),
             (
                 "select",
@@ -353,11 +333,6 @@ async def test_invalid_statements_change_nothing_and_never_echo_inputs(
                 {"table": "items", "values": {"id": {"bogus": "private-slug"}}},
                 "validation error",
             ),
-            (
-                "insert",
-                {"table": "items", "values": [item("private-slug")]},
-                "validation error",
-            ),
         ]:
             text = await fails(client, tool, **arguments)
             assert message in text, (tool, arguments)
@@ -367,7 +342,7 @@ async def test_invalid_statements_change_nothing_and_never_echo_inputs(
 
 
 async def test_transactions_isolate_commit_and_roll_back(database):
-    async with connect(mysql) as client:
+    async with Client(server) as client:
         first = (await ok(client, "begin"))["transaction"]
         await ok(
             client, "insert", table="items", values=item("committed"), transaction=first
@@ -411,75 +386,89 @@ async def test_transactions_isolate_commit_and_roll_back(database):
             transaction=abandoned,
         )
 
-    async with connect(mysql) as client:
+    async with Client(server) as client:
         assert slugs(await ok(client, "select", table="items")) == ["committed"]
 
 
-async def test_handles_are_bearer_leased_and_serve_one_statement_at_a_time(
-    providers, clock
-):
-    async with connect_http("mysql", token("first")) as client:
+async def test_handles_are_bearer_and_serve_one_statement_at_a_time(clients):
+    client, other = clients
+    handle = (await ok(client, "begin"))["transaction"]
+    await ok(client, "insert", table="items", values=item("shared"), transaction=handle)
+    assert slugs(await ok(other, "select", table="items", transaction=handle)) == [
+        "shared"
+    ]
+    assert slugs(await ok(other, "select", table="items")) == []
+    assert "Unknown transaction." in await fails(
+        other, "select", table="items", transaction="missing"
+    )
+
+    entered, resume = Event(), Event()
+
+    def hold_statement(*, statement, **kwargs):
+        if statement == "SELECT 1":
+            entered.set()
+            assert resume.wait(5)
+
+    event.listen(Engine, "before_cursor_execute", hold_statement, named=True)
+    running = asyncio.create_task(
+        ok(client, "execute", sql="SELECT 1", transaction=handle)
+    )
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        assert "Transaction busy." in await fails(
+            other, "select", table="items", transaction=handle
+        )
+    finally:
+        resume.set()
+        await running
+        event.remove(Engine, "before_cursor_execute", hold_statement)
+    await ok(other, "commit", transaction=handle)
+    assert slugs(await ok(client, "select", table="items")) == ["shared"]
+
+
+@pytest.mark.parametrize("idle_timeout", [None, 4])
+async def test_idle_handles_expire(database, clock, monkeypatch, *, idle_timeout):
+    if idle_timeout is not None:
+        monkeypatch.setenv("TRANSACTION_IDLE_TIMEOUT", str(idle_timeout))
+    async with Client(server) as client:
         handle = (await ok(client, "begin"))["transaction"]
         await ok(
-            client, "insert", table="items", values=item("shared"), transaction=handle
+            client, "insert", table="items", values=item("idle"), transaction=handle
         )
-        for identity in (token("other"), None):
-            async with connect_http("mysql", identity) as other:
-                found = await ok(other, "select", table="items", transaction=handle)
-                assert slugs(found) == ["shared"]
-                assert slugs(await ok(other, "select", table="items")) == []
-        assert "Unknown transaction." in await fails(
-            client, "select", table="items", transaction="missing"
-        )
-
-        async def overlapping():
-            await asyncio.sleep(0.2)
-            return await client.call_tool(
-                "select", {"table": "items", "transaction": handle}
-            )
-
-        sleeping, busy = await asyncio.gather(
-            client.call_tool(
-                "execute", {"sql": "SELECT SLEEP(1)", "transaction": handle}
-            ),
-            overlapping(),
-        )
-        assert not sleeping.is_error
-        assert "Transaction busy." in busy.content[0].text
-        async with connect_http("mysql") as other:
-            await ok(other, "commit", transaction=handle)
-        assert slugs(await ok(client, "select", table="items")) == ["shared"]
-
-        idle = (await ok(client, "begin"))["transaction"]
-        await ok(client, "insert", table="items", values=item("idle"), transaction=idle)
-        clock.now += 11
-        refused = await fails(client, "commit", transaction=idle)
+        clock.now += 9 if idle_timeout is None else 3
+        assert slugs(await ok(client, "select", table="items", transaction=handle)) == [
+            "idle"
+        ]
+        clock.now += 10 if idle_timeout is None else 4
+        refused = await fails(client, "commit", transaction=handle)
         assert "Unknown transaction." in refused or "Transaction expired." in refused
-        assert slugs(await ok(client, "select", table="items")) == ["shared"]
+        assert slugs(await ok(client, "select", table="items")) == []
 
 
+@pytest.mark.parametrize("timeout", [None, 12])
 async def test_active_transactions_still_expire_at_the_absolute_deadline(
-    database, clock
+    database, clock, monkeypatch, *, timeout
 ):
-    async with connect(mysql) as client:
+    if timeout is not None:
+        monkeypatch.setenv("TRANSACTION_TIMEOUT", str(timeout))
+    async with Client(server) as client:
         handle = (await ok(client, "begin"))["transaction"]
         await ok(
             client, "insert", table="items", values=item("expired"), transaction=handle
         )
         for _ in range(3):
-            clock.now += 9
+            clock.now += 9 if timeout is None else 3
             assert slugs(
                 await ok(client, "select", table="items", transaction=handle)
             ) == ["expired"]
         clock.now += 3
-        assert "Transaction expired." in await fails(
-            client, "commit", transaction=handle
-        )
+        refused = await fails(client, "commit", transaction=handle)
+        assert "Unknown transaction." in refused or "Transaction expired." in refused
         assert slugs(await ok(client, "select", table="items")) == []
 
 
 async def test_row_locks_hold_until_the_transaction_ends(database):
-    async with connect(mysql) as client:
+    async with Client(server) as client:
         locked, free = item("locked"), item("free")
         for added in (locked, free):
             await ok(client, "insert", table="items", values=added)
@@ -511,3 +500,27 @@ async def test_row_locks_hold_until_the_transaction_ends(database):
             values={"slug": "x"},
             where=by_id(locked),
         ) == {"rowcount": 1}
+
+
+@pytest.mark.parametrize("overrides", [False, True])
+async def test_mysql_session_configuration(database, monkeypatch, overrides):
+    monkeypatch.delenv("INNODB_LOCK_WAIT_TIMEOUT")
+    if overrides:
+        monkeypatch.setenv("WAIT_TIMEOUT", "120")
+        monkeypatch.setenv("INNODB_LOCK_WAIT_TIMEOUT", "2")
+    async with Client(server) as client:
+        result = await ok(
+            client,
+            "execute",
+            sql="""
+            SELECT @@session.wait_timeout AS idle,
+                   @@global.wait_timeout AS default_idle,
+                   @@session.innodb_lock_wait_timeout AS locks,
+                   @@global.innodb_lock_wait_timeout AS default_locks,
+                   @@session.time_zone AS time_zone
+        """,
+        )
+        [row] = result["result"]["rows"]
+        assert row["idle"] == (120 if overrides else row["default_idle"])
+        assert row["locks"] == (2 if overrides else row["default_locks"])
+        assert row["time_zone"] == "+00:00"

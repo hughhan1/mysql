@@ -5,9 +5,8 @@ from mcp.server.mcpserver import Context, MCPServer
 from pydantic import Field
 from sqlalchemy import text
 
-import statements
-import transactions
-from contract import (
+from internal import statements, transactions
+from internal.contract import (
     Affected,
     ColumnName,
     Condition,
@@ -22,18 +21,19 @@ from contract import (
     Transaction,
     Value,
 )
-from database import Database, lifespan
+from internal.database import Database, lifespan
 
-server = MCPServer("mysql", version="0.1.0", lifespan=lifespan)
+server = MCPServer("mysql", version="0.1.1", lifespan=lifespan)
 
 
 @server.tool(
     description=(
         "Begin a transaction and return its handle. Keep it secret: anyone holding "
         "the handle can use the transaction. Pass the handle as `transaction` "
-        "to statements, then commit or roll back. The handle expires after 30 "
-        "seconds, or after 10 idle seconds, and any failed statement rolls the "
-        "whole transaction back."
+        "to statements, then commit or roll back. The handle expires at `expires_at` "
+        "or after TRANSACTION_IDLE_TIMEOUT idle seconds (default 10). "
+        "TRANSACTION_TIMEOUT sets its maximum lifetime (default 30 seconds). "
+        "Expiration or any failed statement rolls the whole transaction back."
     )
 )
 def begin(ctx: Context[Database]) -> Transaction:
@@ -172,3 +172,7 @@ def delete(
             statements.deletion(database.table(connection, table), where)
         )
     return Affected(rowcount=result.rowcount)
+
+
+if __name__ == "__main__":
+    server.run()

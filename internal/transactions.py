@@ -2,10 +2,8 @@ import secrets
 import time
 from datetime import UTC, datetime, timedelta
 
-from contract import Done, Transaction
-from database import IDLE_SECONDS, Database, Lease, failure
-
-TIMEOUT_SECONDS = 30
+from internal.contract import Done, Transaction
+from internal.database import Database, Lease, failure
 
 
 def begin(database: Database) -> Transaction:
@@ -17,11 +15,14 @@ def begin(database: Database) -> Transaction:
             connection.close()
             raise
     now = time.monotonic()
-    key = secrets.token_urlsafe(32)
+    key = secrets.token_urlsafe()
     database.leases[key] = Lease(
-        connection, transaction, now + TIMEOUT_SECONDS, now + IDLE_SECONDS
+        connection,
+        transaction,
+        now + database.transaction_timeout,
+        now + database.transaction_idle_timeout,
     )
-    expires_at = datetime.now(UTC) + timedelta(seconds=TIMEOUT_SECONDS)
+    expires_at = datetime.now(UTC) + timedelta(seconds=database.transaction_timeout)
     return Transaction(
         transaction=key, expires_at=expires_at.isoformat().replace("+00:00", "Z")
     )
