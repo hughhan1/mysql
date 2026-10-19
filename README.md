@@ -47,7 +47,8 @@ apps:
 
 Declare `mysql: {name: io.github.holon-sh/mysql, version: "0.1.0"}` in the
 consumer's `sh.holon.requires`. Supply `DATABASE_URL` through Holon's secret
-store, and authorize private-image pulls in the installation. Egress, `callers`,
+store and authenticate the Holon CLI to GHCR through Docker credentials. The CLI
+imports the image into the installation registry. Egress, `callers`,
 and OAuth are deployment policy; this app has no caller allowlist.
 
 ## Transactions
