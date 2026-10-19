@@ -36,7 +36,11 @@ Production consumers should pin the image digest returned by publication.
 ```yaml
 apps:
   - name: mysql
-    image: ghcr.io/holon-sh/mysql@sha256:<release-digest>
+    registry:
+      name: io.github.holon-sh/mysql
+      version: "0.1.0"
+      registry: https://admin.holon-labs.dev
+      package: {registryType: oci}
     access:
       callers: [my-app]
       server:
@@ -45,8 +49,8 @@ apps:
       - {host: {config: DATABASE_HOST}, ports: [3306]}
 ```
 
-Declare `mysql: {name: io.github.holon-sh/mysql, version: "0.1.0"}` in the
-consumer's `sh.holon.requires`. Supply `DATABASE_URL` through Holon's secret
+Declare the same `name`, `version`, and `registry` under `mysql` in the
+consumer's `sh.holon.requires`. Catalog lookup is public. Supply `DATABASE_URL` through Holon's secret
 store and authenticate the Holon CLI to GHCR through Docker credentials. The CLI
 imports the image into the installation registry. Egress, `callers`,
 and OAuth are deployment policy; this app has no caller allowlist.
@@ -80,14 +84,20 @@ uv run --locked pytest -n 2
 
 ## Publish
 
-Use the Holon CLI with `--image-only` support and authenticate to GHCR with
-Docker credentials:
+Authenticate Docker to GHCR, then supply an installation control-audience token
+with `system:admin:write` through `MCP_REGISTRY_TOKEN`:
 
 ```sh
-holon publish --image-only
+export MCP_REGISTRY_URL=https://admin.holon-labs.dev
+holon publish --registry "$MCP_REGISTRY_URL"
 ```
 
-This publishes the standard MCP descriptor and generated tool contracts inside
-the OCI image without creating a public MCP Registry entry. Keep repository and
-package visibility private. Existing version tags are immutable; change both
-`server.json` and the project/server versions for a new release.
+Publication uploads the private OCI image and registers its digest-pinned MCP
+descriptor in Holon's public catalog. Repository and package visibility remain
+private. Configuration declarations are public; actual secret values are supplied
+at deployment and must never appear in `server.json`.
+
+Existing release tags are reused; change both `server.json` and the project/server
+versions for a new release. The catalog is metadata only and grants no permission
+to pull the image. Consumers outside Holon can use the same descriptor and private
+image with their own hosting and access controls.
