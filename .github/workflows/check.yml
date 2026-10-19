@@ -1,0 +1,35 @@
+name: Checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    services:
+      mysql:
+        image: mysql:8.4.11
+        env:
+          MYSQL_ROOT_PASSWORD: local-test-only
+          MYSQL_ROOT_HOST: "%"
+          MYSQL_DATABASE: mysql_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -plocal-test-only"
+          --health-interval=3s --health-timeout=3s --health-retries=40
+    env:
+      TEST_DATABASE_URL: mysql+pymysql://root:local-test-only@127.0.0.1:3306/mysql_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          version: 0.13.1
+      - run: uv sync --locked
+      - run: uv run --locked ruff check
+      - run: uv run --locked ruff format --check
+      - run: uv run --locked mypy
+      - run: uv run --locked pytest -n 2

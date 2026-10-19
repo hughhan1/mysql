@@ -1,0 +1,5 @@
+apps:
+  - name: mysql
+    path: .
+    access:
+      server: {}
