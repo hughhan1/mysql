@@ -19,22 +19,6 @@
         {
           "name": "CLOUD_SQL_INSTANCE",
           "description": "Optional Cloud SQL project:region:instance; connects through its private IP."
-        },
-        {
-          "name": "TRANSACTION_TIMEOUT",
-          "description": "Maximum MCP transaction-handle lifetime in positive seconds; defaults to 30."
-        },
-        {
-          "name": "TRANSACTION_IDLE_TIMEOUT",
-          "description": "MCP transaction-handle idle timeout in positive seconds; defaults to 10. Independent of MySQL wait_timeout."
-        },
-        {
-          "name": "WAIT_TIMEOUT",
-          "description": "Optional MySQL session wait_timeout in seconds; otherwise uses the server setting."
-        },
-        {
-          "name": "INNODB_LOCK_WAIT_TIMEOUT",
-          "description": "Optional MySQL session innodb_lock_wait_timeout in seconds; otherwise uses the server setting."
         }
       ],
       "identifier": "ghcr.io/hughhan1/mysql:0.0.1"

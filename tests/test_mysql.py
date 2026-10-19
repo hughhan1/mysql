@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from contextlib import ExitStack
 from threading import Event
 from uuid import uuid4
 
@@ -344,7 +343,9 @@ async def test_invalid_statements_change_nothing_and_never_echo_inputs(
 
 async def test_transactions_isolate_commit_and_roll_back(database):
     async with Client(server) as client:
-        first = (await ok(client, "begin"))["transaction"]
+        started = await ok(client, "begin")
+        assert set(started) == {"transaction"}
+        first = started["transaction"]
         await ok(
             client, "insert", table="items", values=item("committed"), transaction=first
         )
@@ -373,7 +374,9 @@ async def test_transactions_isolate_commit_and_roll_back(database):
             values=item("committed"),
             transaction=failed,
         )
-        assert "Duplicate key items.uq_items_identity (1062)." in duplicate
+        assert "(1062," in duplicate
+        assert "Duplicate entry 'catalog-committed'" in duplicate
+        assert "items.uq_items_identity" in duplicate
         assert "Unknown transaction." in await fails(
             client, "commit", transaction=failed
         )
@@ -427,47 +430,6 @@ async def test_handles_are_bearer_and_serve_one_statement_at_a_time(clients):
     assert slugs(await ok(client, "select", table="items")) == ["shared"]
 
 
-@pytest.mark.parametrize("idle_timeout", [None, 4])
-async def test_idle_handles_expire(database, clock, monkeypatch, *, idle_timeout):
-    if idle_timeout is not None:
-        monkeypatch.setenv("TRANSACTION_IDLE_TIMEOUT", str(idle_timeout))
-    async with Client(server) as client:
-        handle = (await ok(client, "begin"))["transaction"]
-        await ok(
-            client, "insert", table="items", values=item("idle"), transaction=handle
-        )
-        clock.now += 9 if idle_timeout is None else 3
-        assert slugs(await ok(client, "select", table="items", transaction=handle)) == [
-            "idle"
-        ]
-        clock.now += 10 if idle_timeout is None else 4
-        refused = await fails(client, "commit", transaction=handle)
-        assert "Unknown transaction." in refused or "Transaction expired." in refused
-        assert slugs(await ok(client, "select", table="items")) == []
-
-
-@pytest.mark.parametrize("timeout", [None, 12])
-async def test_active_transactions_still_expire_at_the_absolute_deadline(
-    database, clock, monkeypatch, *, timeout
-):
-    if timeout is not None:
-        monkeypatch.setenv("TRANSACTION_TIMEOUT", str(timeout))
-    async with Client(server) as client:
-        handle = (await ok(client, "begin"))["transaction"]
-        await ok(
-            client, "insert", table="items", values=item("expired"), transaction=handle
-        )
-        for _ in range(3):
-            clock.now += 9 if timeout is None else 3
-            assert slugs(
-                await ok(client, "select", table="items", transaction=handle)
-            ) == ["expired"]
-        clock.now += 3
-        refused = await fails(client, "commit", transaction=handle)
-        assert "Unknown transaction." in refused or "Transaction expired." in refused
-        assert slugs(await ok(client, "select", table="items")) == []
-
-
 async def test_row_locks_hold_until_the_transaction_ends(database):
     async with Client(server) as client:
         locked, free = item("locked"), item("free")
@@ -486,9 +448,24 @@ async def test_row_locks_hold_until_the_transaction_ends(database):
             for_update=True,
             transaction=holder,
         )
+        blocked = (await ok(client, "begin"))["transaction"]
+        await ok(
+            client,
+            "execute",
+            sql="SET SESSION innodb_lock_wait_timeout = 1",
+            transaction=blocked,
+        )
         rename = {"slug": "renamed"}
-        assert "Lock wait timeout (1205)." in await fails(
-            client, "update", table="items", values=rename, where=by_id(locked)
+        assert (
+            "(1205, 'Lock wait timeout exceeded; try restarting transaction')"
+            in await fails(
+                client,
+                "update",
+                table="items",
+                values=rename,
+                where=by_id(locked),
+                transaction=blocked,
+            )
         )
         assert await ok(
             client, "update", table="items", values=rename, where=by_id(free)
@@ -503,12 +480,7 @@ async def test_row_locks_hold_until_the_transaction_ends(database):
         ) == {"rowcount": 1}
 
 
-@pytest.mark.parametrize("overrides", [False, True])
-async def test_mysql_session_configuration(database, monkeypatch, overrides):
-    monkeypatch.delenv("INNODB_LOCK_WAIT_TIMEOUT")
-    if overrides:
-        monkeypatch.setenv("WAIT_TIMEOUT", "120")
-        monkeypatch.setenv("INNODB_LOCK_WAIT_TIMEOUT", "2")
+async def test_mysql_session_uses_server_timeouts(database):
     async with Client(server) as client:
         result = await ok(
             client,
@@ -522,8 +494,8 @@ async def test_mysql_session_configuration(database, monkeypatch, overrides):
         """,
         )
         [row] = result["result"]["rows"]
-        assert row["idle"] == (120 if overrides else row["default_idle"])
-        assert row["locks"] == (2 if overrides else row["default_locks"])
+        assert row["idle"] == row["default_idle"]
+        assert row["locks"] == row["default_locks"]
         assert row["time_zone"] == "+00:00"
 
 
@@ -564,12 +536,11 @@ async def test_commit_failure_rolls_back_and_ends_the_handle(database):
         await ok(
             client, "insert", table="items", values=item("failed"), transaction=handle
         )
-        with ExitStack() as stack:
-            event.listen(Engine, "commit", fail_commit)
-            stack.callback(event.remove, Engine, "commit", fail_commit)
-            assert "Database unavailable." in await fails(
-                client, "commit", transaction=handle
-            )
+        event.listen(Engine, "commit", fail_commit)
+        try:
+            assert "commit failed" in await fails(client, "commit", transaction=handle)
+        finally:
+            event.remove(Engine, "commit", fail_commit)
         assert "Unknown transaction." in await fails(
             client, "rollback", transaction=handle
         )

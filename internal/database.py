@@ -1,55 +1,40 @@
 import os
-import re
 import threading
-import time
 from collections.abc import AsyncIterator, Iterator
-from contextlib import ExitStack, asynccontextmanager, contextmanager, suppress
+from contextlib import (
+    asynccontextmanager,
+    closing,
+    contextmanager,
+    nullcontext,
+    suppress,
+)
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import Any
 
 from google.cloud.sql.connector import Connector, IPTypes
 from google.cloud.sql.connector.enums import RefreshStrategy
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ConfigDict
-from pymysql.constants import CLIENT, ER
+from pymysql.constants import CLIENT
 from sqlalchemy import Connection, MetaData, RootTransaction, Table, create_engine
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import InvalidRequestError, SQLAlchemyError
 
-ER_LOCK_NOWAIT: Final = 3572
-FAILURES: Final = {
-    ER.LOCK_WAIT_TIMEOUT: "Lock wait timeout",
-    ER.LOCK_DEADLOCK: "Deadlock",
-    ER_LOCK_NOWAIT: "Row is locked",
-}
-DUPLICATE_KEY: Final = re.compile(r"for key '([^']+)'\Z")
 
-
-@dataclass(slots=True)
-class Lease:
+@dataclass(frozen=True, slots=True)
+class TransactionState:
     connection: Connection
     transaction: RootTransaction
-    deadline: float
-    idle: float
     lock: threading.Lock = field(default_factory=threading.Lock)
-
-    def expired(self) -> bool:
-        return time.monotonic() >= min(self.deadline, self.idle)
 
 
 @dataclass(frozen=True, slots=True)
 class Database:
     engine: Engine
-    transaction_timeout: int = 30
-    transaction_idle_timeout: int = 10
     metadata: MetaData = field(default_factory=MetaData, init=False)
     reflecting: threading.Lock = field(default_factory=threading.Lock, init=False)
-    leases: dict[str, Lease] = field(default_factory=dict, init=False)
-
-    def __post_init__(self) -> None:
-        if min(self.transaction_timeout, self.transaction_idle_timeout) <= 0:
-            raise ValueError("Transaction timeouts must be positive seconds.")
+    transactions: dict[str, TransactionState] = field(default_factory=dict, init=False)
 
     def table(self, connection: Connection, name: str) -> Table:
         with self.reflecting:
@@ -60,89 +45,59 @@ class Database:
                     raise ToolError(f"Unknown table {name}.") from None
             return self.metadata.tables[name]
 
-    def release(self, key: str, lease: Lease, commit: bool = False) -> None:
-        self.leases.pop(key, None)
-        with failure(), ExitStack() as stack:
-            stack.enter_context(lease.connection)
-            if commit:
-                stack.enter_context(lease.transaction)
+    def release(self, key: str, commit: bool = False) -> None:
+        state = self.transactions.pop(key, None)
+        if state is not None:
+            with state.connection, state.transaction:
+                if not commit:
+                    state.transaction.rollback()
 
     def close(self) -> None:
-        for key, lease in list(self.leases.items()):
-            with suppress(ToolError):
-                self.release(key, lease)
+        for key in list(self.transactions):
+            with suppress(SQLAlchemyError):
+                self.release(key)
 
     @contextmanager
     def connection(self, transaction: str | None) -> Iterator[Connection]:
-        if transaction is None:
-            with failure(), self.engine.begin() as connection:
-                yield connection
-            return
-        lease = self.leases.get(transaction)
-        if lease is None:
-            raise ToolError("Unknown transaction.")
-        if not lease.lock.acquire(blocking=False):
-            raise ToolError("Transaction busy.")
-        with ExitStack() as stack:
-            stack.callback(lease.lock.release)
-            if self.leases.get(transaction) is not lease:
+        try:
+            if transaction is None:
+                with self.engine.begin() as connection:
+                    yield connection
+                return
+            state = self.transactions.get(transaction)
+            if state is None:
                 raise ToolError("Unknown transaction.")
-            if lease.expired():
-                self.release(transaction, lease)
-                raise ToolError("Transaction expired.")
+            if not state.lock.acquire(blocking=False):
+                raise ToolError("Transaction busy.")
             try:
-                with failure():
-                    yield lease.connection
+                if self.transactions.get(transaction) is not state:
+                    raise ToolError("Unknown transaction.")
+                yield state.connection
             except BaseException:
-                with suppress(ToolError):
-                    self.release(transaction, lease)
+                with suppress(SQLAlchemyError):
+                    self.release(transaction)
                 raise
-            lease.idle = time.monotonic() + self.transaction_idle_timeout
-
-    def reap(self, stop: threading.Event) -> None:
-        while not stop.wait(1):
-            for key, lease in list(self.leases.items()):
-                if lease.expired() and lease.lock.acquire(blocking=False):
-                    with ExitStack() as stack:
-                        stack.callback(lease.lock.release)
-                        if self.leases.get(key) is lease:
-                            with suppress(ToolError):
-                                self.release(key, lease)
-
-
-@contextmanager
-def failure() -> Iterator[None]:
-    try:
-        yield
-    except SQLAlchemyError as error:
-        args: tuple[Any, ...] = getattr(getattr(error, "orig", None), "args", ())
-        code = args[0] if args and isinstance(args[0], int) else None
-        if code is None:
-            raise ToolError("Database unavailable.") from None
-        if code == ER.DUP_ENTRY and (key := DUPLICATE_KEY.search(str(args[-1]))):
-            raise ToolError(f"Duplicate key {key[1]} ({code}).") from None
-        raise ToolError(f"{FAILURES.get(code, 'Database error')} ({code}).") from None
+            finally:
+                state.lock.release()
+        except SQLAlchemyError as error:
+            raise ToolError(str(getattr(error, "orig", error))) from error
 
 
 @contextmanager
 def database_engine() -> Iterator[Engine]:
     url = make_url(os.environ["DATABASE_URL"])
-    session = ["time_zone = '+00:00'"]
-    for name in ("wait_timeout", "innodb_lock_wait_timeout"):
-        if value := os.getenv(name.upper()):
-            session.append(f"{name} = {int(value)}")
     connection_options: dict[str, Any] = {
-        "init_command": "SET " + ", ".join(session),
+        "init_command": "SET time_zone = '+00:00'",
         "client_flag": CLIENT.FOUND_ROWS,
     }
-    with ExitStack() as stack:
+    instance = os.getenv("CLOUD_SQL_INSTANCE")
+    with (
+        Connector(ip_type=IPTypes.PRIVATE, refresh_strategy=RefreshStrategy.LAZY)
+        if instance
+        else nullcontext()
+    ) as connector:
         options: dict[str, Any] = {}
-        if instance := os.getenv("CLOUD_SQL_INSTANCE"):
-            connector = stack.enter_context(
-                Connector(
-                    ip_type=IPTypes.PRIVATE, refresh_strategy=RefreshStrategy.LAZY
-                )
-            )
+        if connector:
             options["creator"] = lambda: connector.connect(
                 instance,
                 "pymysql",
@@ -158,8 +113,10 @@ def database_engine() -> Iterator[Engine]:
             connect_args=connection_options,
             **options,
         )
-        stack.callback(engine.dispose)
-        yield engine
+        try:
+            yield engine
+        finally:
+            engine.dispose()
 
 
 @asynccontextmanager
@@ -169,19 +126,5 @@ async def lifespan(server: MCPServer[Any]) -> AsyncIterator[Database]:
             ConfigDict(extra="forbid", hide_input_in_errors=True)
         )
         tool.fn_metadata.arg_model.model_rebuild(force=True)
-    with database_engine() as engine, ExitStack() as stack:
-        database = Database(
-            engine,
-            **{
-                name: int(value)
-                for name in ("transaction_timeout", "transaction_idle_timeout")
-                if (value := os.getenv(name.upper()))
-            },
-        )
-        stack.callback(database.close)
-        stop = threading.Event()
-        reaper = threading.Thread(target=database.reap, args=(stop,), daemon=True)
-        reaper.start()
-        stack.callback(reaper.join)
-        stack.callback(stop.set)
+    with database_engine() as engine, closing(Database(engine)) as database:
         yield database

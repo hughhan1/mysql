@@ -1,33 +1,31 @@
 import secrets
-import time
-from contextlib import ExitStack
-from datetime import UTC, datetime, timedelta
+from contextlib import suppress
+
+from mcp.server.mcpserver.exceptions import ToolError
+from sqlalchemy.exc import SQLAlchemyError
 
 from internal.contract import Done, Transaction
-from internal.database import Database, Lease, failure
+from internal.database import Database, TransactionState
 
 
 def begin(database: Database) -> Transaction:
-    with failure(), ExitStack() as stack:
-        connection = stack.enter_context(database.engine.connect())
-        transaction = connection.begin()
-        now = time.monotonic()
-        key = secrets.token_urlsafe()
-        expires_at = datetime.now(UTC) + timedelta(seconds=database.transaction_timeout)
-        result = Transaction(
-            transaction=key, expires_at=expires_at.isoformat().replace("+00:00", "Z")
-        )
-        database.leases[key] = Lease(
-            connection,
-            transaction,
-            now + database.transaction_timeout,
-            now + database.transaction_idle_timeout,
-        )
-        stack.pop_all()
-        return result
+    result = Transaction(transaction=secrets.token_urlsafe())
+    try:
+        connection = database.engine.connect()
+        try:
+            database.transactions[result.transaction] = TransactionState(
+                connection, connection.begin()
+            )
+        except BaseException:
+            with suppress(SQLAlchemyError):
+                connection.close()
+            raise
+    except SQLAlchemyError as error:
+        raise ToolError(str(getattr(error, "orig", error))) from error
+    return result
 
 
 def end(database: Database, key: str, *, commit: bool) -> Done:
     with database.connection(key):
-        database.release(key, database.leases[key], commit=commit)
+        database.release(key, commit=commit)
     return Done()

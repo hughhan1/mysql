@@ -90,7 +90,6 @@ class Affected(BaseModel):
 
 class Transaction(BaseModel):
     transaction: str
-    expires_at: str
 
 
 class Done(BaseModel):
