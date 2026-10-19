@@ -1,0 +1,32 @@
+{
+  "name": "io.github.hughhan1/mysql",
+  "version": "0.0.1",
+  "description": "MySQL statements and transactions over MCP",
+  "packages": [
+    {
+      "registryType": "oci",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:3000/mcp"
+      },
+      "environmentVariables": [
+        {
+          "name": "DATABASE_URL",
+          "isRequired": true,
+          "isSecret": true,
+          "description": "SQLAlchemy mysql+pymysql URL for one existing MySQL 8.4 database."
+        },
+        {
+          "name": "CLOUD_SQL_INSTANCE",
+          "description": "Optional Cloud SQL project:region:instance; connects through its private IP."
+        }
+      ],
+      "identifier": "ghcr.io/hughhan1/mysql:0.0.1"
+    }
+  ],
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "repository": {
+    "url": "https://github.com/hughhan1/mysql",
+    "source": "github"
+  }
+}

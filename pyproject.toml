@@ -1,0 +1,37 @@
+[project]
+name = "mysql"
+version = "0.0.1"
+description = "MySQL statements and transactions over MCP"
+requires-python = "==3.15.*"
+dependencies = [
+  "cloud-sql-python-connector[pymysql]==1.23.0",
+  "mcp==2.3.0",
+  "pydantic==2.14.1",
+  "pymysql[rsa]==1.2.3",
+  "sqlalchemy==2.1.5",
+]
+
+[tool.mypy]
+strict = true
+files = ["server.py", "internal"]
+
+[dependency-groups]
+dev = [
+  "mypy==2.4.0",
+  "pytest==9.1.1",
+  "ruff==0.17.1",
+  "types-pymysql==1.2.0.20260923",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff.lint]
+select = ["C901", "E", "F", "I", "PLR0917", "UP"]
+
+[tool.ruff.lint.pylint]
+max-positional-args = 3
