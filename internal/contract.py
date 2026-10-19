@@ -1,12 +1,7 @@
-from typing import Annotated, Literal
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-NAME = r"^[A-Za-z_][A-Za-z0-9_]*$"
-QUALIFIED = r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$"
-
-Name = Annotated[str, Field(pattern=NAME)]
-ColumnName = Annotated[str, Field(pattern=QUALIFIED)]
 Scalar = str | int | float | bool | None
 Operator = Literal[
     "eq",
@@ -27,13 +22,13 @@ Operator = Literal[
 class ColumnRef(BaseModel):
     model_config = {"extra": "forbid"}
 
-    column: ColumnName
+    column: str
 
 
 class InsertedRef(BaseModel):
     model_config = {"extra": "forbid"}
 
-    inserted: Name
+    inserted: str
 
 
 class Expression(BaseModel):
@@ -49,7 +44,7 @@ Value = Scalar | ColumnRef | InsertedRef | Expression
 class Condition(BaseModel):
     model_config = {"extra": "forbid"}
 
-    column: ColumnName
+    column: str
     op: Operator
     value: Scalar | ColumnRef | Expression | list[Scalar] = None
 
@@ -66,21 +61,21 @@ Predicate = Condition | Or
 class LabeledColumn(BaseModel):
     model_config = {"extra": "forbid"}
 
-    column: ColumnName
-    label: Name
+    column: str
+    label: str
 
 
 class OrderBy(BaseModel):
     model_config = {"extra": "forbid"}
 
-    column: ColumnName
+    column: str
     direction: Literal["asc", "desc"] = "asc"
 
 
 class Join(BaseModel):
     model_config = {"extra": "forbid"}
 
-    table: Name
+    table: str
     on: list[Predicate]
     isouter: bool = False
 

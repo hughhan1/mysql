@@ -1,11 +1,13 @@
 import asyncio
 import logging
+from contextlib import ExitStack
 from threading import Event
 from uuid import uuid4
 
 import pytest
 from mcp import Client
 from sqlalchemy import Engine, event
+from sqlalchemy.exc import SQLAlchemyError
 
 from server import server
 
@@ -317,7 +319,6 @@ async def test_invalid_statements_change_nothing_and_never_echo_inputs(
                 {"table": "items", "where": []},
                 "Delete needs a where condition.",
             ),
-            ("select", {"table": "items;private-slug"}, "validation error"),
             (
                 "select",
                 {"table": "items", "where": [{"or_": []}]},
@@ -524,3 +525,52 @@ async def test_mysql_session_configuration(database, monkeypatch, overrides):
         assert row["idle"] == (120 if overrides else row["default_idle"])
         assert row["locks"] == (2 if overrides else row["default_locks"])
         assert row["time_zone"] == "+00:00"
+
+
+async def test_names_accept_mysql_identifiers_that_require_quoting(database):
+    async with Client(server) as client:
+        await ok(
+            client,
+            "execute",
+            sql="""
+            CREATE TABLE `order-items` (
+                `客户` INT PRIMARY KEY,
+                `full name` VARCHAR(100) NOT NULL
+            )
+        """,
+        )
+        await ok(
+            client,
+            "insert",
+            table="order-items",
+            values={"客户": 1, "full name": "Ada"},
+        )
+        found = await ok(
+            client,
+            "select",
+            table="order-items",
+            columns=[{"column": "order-items.full name", "label": "display name"}],
+            where=[{"column": "客户", "op": "eq", "value": 1}],
+        )
+        assert found == {"rows": [{"display name": "Ada"}]}
+
+
+async def test_commit_failure_rolls_back_and_ends_the_handle(database):
+    def fail_commit(connection):
+        raise SQLAlchemyError("commit failed")
+
+    async with Client(server) as client:
+        handle = (await ok(client, "begin"))["transaction"]
+        await ok(
+            client, "insert", table="items", values=item("failed"), transaction=handle
+        )
+        with ExitStack() as stack:
+            event.listen(Engine, "commit", fail_commit)
+            stack.callback(event.remove, Engine, "commit", fail_commit)
+            assert "Database unavailable." in await fails(
+                client, "commit", transaction=handle
+            )
+        assert "Unknown transaction." in await fails(
+            client, "rollback", transaction=handle
+        )
+        assert slugs(await ok(client, "select", table="items")) == []

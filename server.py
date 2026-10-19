@@ -8,12 +8,10 @@ from sqlalchemy import text
 from internal import statements, transactions
 from internal.contract import (
     Affected,
-    ColumnName,
     Condition,
     Done,
     Join,
     LabeledColumn,
-    Name,
     OrderBy,
     Predicate,
     Rows,
@@ -90,8 +88,8 @@ def execute(
 def select(
     ctx: Context[Database],
     *,
-    table: Name,
-    columns: list[ColumnName] | list[LabeledColumn] | None = None,
+    table: str,
+    columns: list[str] | list[LabeledColumn] | None = None,
     joins: list[Join] | None = None,
     where: list[Predicate] | None = None,
     order_by: list[OrderBy] | None = None,
@@ -125,7 +123,7 @@ def select(
 def insert(
     ctx: Context[Database],
     *,
-    table: Name,
+    table: str,
     values: dict[str, Value],
     on_duplicate_key_update: dict[str, Value] | None = None,
     transaction: str | None = None,
@@ -149,7 +147,7 @@ def insert(
 def update(
     ctx: Context[Database],
     *,
-    table: Name,
+    table: str,
     values: dict[str, Value],
     where: list[Condition],
     transaction: str | None = None,
@@ -171,7 +169,7 @@ def update(
 def delete(
     ctx: Context[Database],
     *,
-    table: Name,
+    table: str,
     where: list[Condition],
     transaction: str | None = None,
 ) -> Affected:

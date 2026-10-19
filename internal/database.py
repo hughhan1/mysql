@@ -62,15 +62,15 @@ class Database:
 
     def release(self, key: str, lease: Lease, commit: bool = False) -> None:
         self.leases.pop(key, None)
-        with failure():
-            try:
-                if commit:
-                    lease.transaction.commit()
-            except BaseException:
-                lease.transaction.rollback()
-                raise
-            finally:
-                lease.connection.close()
+        with failure(), ExitStack() as stack:
+            stack.enter_context(lease.connection)
+            if commit:
+                stack.enter_context(lease.transaction)
+
+    def close(self) -> None:
+        for key, lease in list(self.leases.items()):
+            with suppress(ToolError):
+                self.release(key, lease)
 
     @contextmanager
     def connection(self, transaction: str | None) -> Iterator[Connection]:
@@ -83,7 +83,8 @@ class Database:
             raise ToolError("Unknown transaction.")
         if not lease.lock.acquire(blocking=False):
             raise ToolError("Transaction busy.")
-        try:
+        with ExitStack() as stack:
+            stack.callback(lease.lock.release)
             if self.leases.get(transaction) is not lease:
                 raise ToolError("Unknown transaction.")
             if lease.expired():
@@ -97,19 +98,16 @@ class Database:
                     self.release(transaction, lease)
                 raise
             lease.idle = time.monotonic() + self.transaction_idle_timeout
-        finally:
-            lease.lock.release()
 
     def reap(self, stop: threading.Event) -> None:
         while not stop.wait(1):
             for key, lease in list(self.leases.items()):
                 if lease.expired() and lease.lock.acquire(blocking=False):
-                    try:
+                    with ExitStack() as stack:
+                        stack.callback(lease.lock.release)
                         if self.leases.get(key) is lease:
                             with suppress(ToolError):
                                 self.release(key, lease)
-                    finally:
-                        lease.lock.release()
 
 
 @contextmanager
@@ -171,7 +169,7 @@ async def lifespan(server: MCPServer[Any]) -> AsyncIterator[Database]:
             ConfigDict(extra="forbid", hide_input_in_errors=True)
         )
         tool.fn_metadata.arg_model.model_rebuild(force=True)
-    with database_engine() as engine:
+    with database_engine() as engine, ExitStack() as stack:
         database = Database(
             engine,
             **{
@@ -180,14 +178,10 @@ async def lifespan(server: MCPServer[Any]) -> AsyncIterator[Database]:
                 if (value := os.getenv(name.upper()))
             },
         )
+        stack.callback(database.close)
         stop = threading.Event()
         reaper = threading.Thread(target=database.reap, args=(stop,), daemon=True)
         reaper.start()
-        try:
-            yield database
-        finally:
-            stop.set()
-            reaper.join()
-            for key, lease in list(database.leases.items()):
-                with suppress(ToolError):
-                    database.release(key, lease)
+        stack.callback(reaper.join)
+        stack.callback(stop.set)
+        yield database
