@@ -21,7 +21,7 @@ from internal.contract import (
 )
 from internal.database import Database, lifespan
 
-server = MCPServer("mysql", version="0.0.1", lifespan=lifespan)
+server = MCPServer("mysql", version="0.4.1", lifespan=lifespan)
 
 
 @server.tool(
