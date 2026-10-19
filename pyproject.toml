@@ -1,6 +1,6 @@
 [project]
-name = "holon-mysql"
-version = "0.1.1"
+name = "mysql"
+version = "0.0.1"
 description = "MySQL statements and transactions over MCP"
 requires-python = "==3.15.*"
 dependencies = [

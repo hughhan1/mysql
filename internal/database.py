@@ -137,15 +137,8 @@ def database_engine() -> Iterator[Engine]:
         "init_command": "SET " + ", ".join(session),
         "client_flag": CLIENT.FOUND_ROWS,
     }
-    for name in ("connect_timeout", "read_timeout", "write_timeout"):
-        if value := os.getenv(name.upper()):
-            connection_options[name] = int(value)
     with ExitStack() as stack:
-        options: dict[str, Any] = {
-            name: int(value)
-            for name in ("pool_size", "max_overflow", "pool_timeout")
-            if (value := os.getenv(name.upper()))
-        }
+        options: dict[str, Any] = {}
         if instance := os.getenv("CLOUD_SQL_INSTANCE"):
             connector = stack.enter_context(
                 Connector(

@@ -23,31 +23,37 @@ from internal.contract import (
 )
 from internal.database import Database, lifespan
 
-server = MCPServer("mysql", version="0.1.1", lifespan=lifespan)
+server = MCPServer("mysql", version="0.0.1", lifespan=lifespan)
 
 
 @server.tool(
     description=(
-        "Begin a transaction and return its handle. Keep it secret: anyone holding "
-        "the handle can use the transaction. Pass the handle as `transaction` "
-        "to statements, then commit or roll back. The handle expires at `expires_at` "
-        "or after TRANSACTION_IDLE_TIMEOUT idle seconds (default 10). "
-        "TRANSACTION_TIMEOUT sets its maximum lifetime (default 30 seconds). "
-        "Expiration or any failed statement rolls the whole transaction back."
+        "[BEGIN](https://dev.mysql.com/doc/refman/8.4/en/commit.html) "
+        "starts a new transaction."
     )
 )
 def begin(ctx: Context[Database]) -> Transaction:
     return transactions.begin(ctx.request_context.lifespan_context)
 
 
-@server.tool(description="Commit a transaction and end its handle.")
+@server.tool(
+    description=(
+        "[COMMIT](https://dev.mysql.com/doc/refman/8.4/en/commit.html) "
+        "commits the current transaction, making its changes permanent."
+    )
+)
 def commit(ctx: Context[Database], transaction: str) -> Done:
     return transactions.end(
         ctx.request_context.lifespan_context, transaction, commit=True
     )
 
 
-@server.tool(description="Roll back a transaction and end its handle.")
+@server.tool(
+    description=(
+        "[ROLLBACK](https://dev.mysql.com/doc/refman/8.4/en/commit.html) "
+        "rolls back the current transaction, canceling its changes."
+    )
+)
 def rollback(ctx: Context[Database], transaction: str) -> Done:
     return transactions.end(
         ctx.request_context.lifespan_context, transaction, commit=False
@@ -56,8 +62,8 @@ def rollback(ctx: Context[Database], transaction: str) -> Done:
 
 @server.tool(
     description=(
-        "Run one SQL statement with named `:parameters`. Without `transaction` the "
-        "statement commits on its own."
+        "Execute an SQL statement. "
+        "[MySQL SQL statements](https://dev.mysql.com/doc/refman/8.4/en/sql-statements.html)"
     )
 )
 def execute(
@@ -77,15 +83,8 @@ def execute(
 
 @server.tool(
     description=(
-        "Select rows. Conditions in `where` and in each join's `on` are combined with "
-        "AND; {'or_': [conditions]} groups nonempty lists of simple alternatives. "
-        "Joins are inner unless `isouter` is true. Columns are a list of names or "
-        "a list of {'column': name, 'label': name} objects to rename results. "
-        "Names may be qualified as table.column and must be unambiguous. "
-        "`order_by` takes columns with direction 'asc' (default) or 'desc'. "
-        "`limit` and `offset` are nonnegative; omitted values leave rows unbounded "
-        "and start at the first row. Use an explicit order for stable pages. "
-        "`for_update` locks the selected rows until the transaction ends."
+        "[SELECT](https://dev.mysql.com/doc/refman/8.4/en/select.html) "
+        "is used to retrieve rows selected from one or more tables."
     )
 )
 def select(
@@ -119,8 +118,8 @@ def select(
 
 @server.tool(
     description=(
-        "Insert one row. `on_duplicate_key_update` may reference the attempted row "
-        "with {'inserted': column}."
+        "[INSERT](https://dev.mysql.com/doc/refman/8.4/en/insert.html) "
+        "inserts new rows into an existing table."
     )
 )
 def insert(
@@ -141,7 +140,12 @@ def insert(
     return Affected(rowcount=result.rowcount)
 
 
-@server.tool(description="Update the rows matching every `where` condition.")
+@server.tool(
+    description=(
+        "[UPDATE](https://dev.mysql.com/doc/refman/8.4/en/update.html) "
+        "is a DML statement that modifies rows in a table."
+    )
+)
 def update(
     ctx: Context[Database],
     *,
@@ -158,7 +162,12 @@ def update(
     return Affected(rowcount=result.rowcount)
 
 
-@server.tool(description="Delete the rows matching every `where` condition.")
+@server.tool(
+    description=(
+        "[DELETE](https://dev.mysql.com/doc/refman/8.4/en/delete.html) "
+        "is a DML statement that removes rows from a table."
+    )
+)
 def delete(
     ctx: Context[Database],
     *,
