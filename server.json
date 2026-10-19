@@ -1,6 +1,6 @@
 {
   "name": "io.github.hughhan1/mysql",
-  "version": "0.0.1",
+  "version": "0.4.1",
   "description": "MySQL statements and transactions over MCP",
   "packages": [
     {
@@ -21,7 +21,7 @@
           "description": "Optional Cloud SQL project:region:instance; connects through its private IP."
         }
       ],
-      "identifier": "ghcr.io/hughhan1/mysql:0.0.1"
+      "identifier": "ghcr.io/hughhan1/mysql:0.4.1"
     }
   ],
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
