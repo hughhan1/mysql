@@ -1,7 +1,7 @@
 # MySQL MCP provider
 
 Eight MCP tools for an existing MySQL 8.4 database: `execute`, `select`, `insert`,
-`update`, `delete`, `begin`, `commit`, and `rollback`. The private OCI image runs on
+`update`, `delete`, `begin`, `commit`, and `rollback`. The public OCI image runs on
 Linux arm64 and amd64 and serves Streamable HTTP at `/mcp` on port 3000.
 
 The provider owns connection pooling, SQL execution, table reflection, result
@@ -20,10 +20,10 @@ change database grants.
 
 ## Run outside Holon
 
-Authenticate to GHCR with an account that can read this private package, then run:
+Run the public image with your database connection supplied through the environment:
 
 ```sh
-docker run --rm -p 127.0.0.1:3000:3000 --env DATABASE_URL ghcr.io/holon-sh/mysql:0.1.0
+docker run --rm -p 127.0.0.1:3000:3000 --env DATABASE_URL ghcr.io/hughhan1/mysql:0.1.0
 ```
 
 `DATABASE_URL` must address a database reachable from the container. No Holon
@@ -37,9 +37,9 @@ Production consumers should pin the image digest returned by publication.
 apps:
   - name: mysql
     registry:
-      name: io.github.holon-sh/mysql
+      name: io.github.hughhan1/mysql
       version: "0.1.0"
-      registry: https://admin.holon-labs.dev
+      registry: https://registry.modelcontextprotocol.io
       package: {registryType: oci}
     access:
       callers: [my-app]
@@ -50,9 +50,9 @@ apps:
 ```
 
 Declare the same `name`, `version`, and `registry` under `mysql` in the
-consumer's `sh.holon.requires`. Catalog lookup is public. Supply `DATABASE_URL` through Holon's secret
-store and authenticate the Holon CLI to GHCR through Docker credentials. The CLI
-imports the image into the installation registry. Egress, `callers`,
+consumer's `sh.holon.requires`. The catalog and image are public. Supply
+`DATABASE_URL` through Holon's secret store. The CLI imports the image into the
+installation registry. Egress, `callers`,
 and OAuth are deployment policy; this app has no caller allowlist.
 
 ## Transactions
@@ -84,20 +84,25 @@ uv run --locked pytest -n 2
 
 ## Publish
 
-Authenticate Docker to GHCR, then supply an installation control-audience token
-with `system:admin:write` through `MCP_REGISTRY_TOKEN`:
+Authenticate Docker to GHCR with permission to push `ghcr.io/hughhan1/mysql`,
+then publish through the existing Holon CLI:
 
 ```sh
-export MCP_REGISTRY_URL=https://admin.holon-labs.dev
-holon publish --registry "$MCP_REGISTRY_URL"
+holon publish --registry https://registry.modelcontextprotocol.io
 ```
 
-Publication uploads the private OCI image and registers its digest-pinned MCP
-descriptor in Holon's public catalog. Repository and package visibility remain
-private. Configuration declarations are public; actual secret values are supplied
-at deployment and must never appear in `server.json`.
+The CLI authenticates to the official MCP Registry through `mcp-publisher`,
+builds and pushes the image and tool contracts, and registers a digest-pinned
+descriptor as `io.github.hughhan1/mysql`. Publish using the `hughhan1` GitHub
+identity or GitHub Actions OIDC from this repository.
 
-Existing release tags are reused; change both `server.json` and the project/server
-versions for a new release. The catalog is metadata only and grants no permission
-to pull the image. Consumers outside Holon can use the same descriptor and private
-image with their own hosting and access controls.
+GHCR creates new packages as private. On the first publication, make the new
+package public in its GitHub package settings, then rerun the command if registry
+validation rejected the private image. The retry reuses the uploaded image.
+Subsequent versions retain the package's public visibility.
+
+Existing release tags are reused; change the descriptor, project, and server
+versions for a new release. Source, image, and configuration declarations are
+public. Actual credentials are supplied at deployment and must never appear in
+`server.json`. Consumers outside Holon can use the same descriptor and image with
+their own hosting and access controls.

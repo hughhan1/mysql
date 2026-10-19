@@ -1,5 +1,5 @@
 {
-  "name": "io.github.holon-sh/mysql",
+  "name": "io.github.hughhan1/mysql",
   "version": "0.1.0",
   "description": "MySQL statements and transactions over MCP",
   "packages": [
@@ -21,12 +21,12 @@
           "description": "Optional Cloud SQL project:region:instance; connects through its private IP."
         }
       ],
-      "identifier": "ghcr.io/holon-sh/mysql:0.1.0"
+      "identifier": "ghcr.io/hughhan1/mysql:0.1.0"
     }
   ],
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "repository": {
-    "url": "https://github.com/holon-sh/mysql",
+    "url": "https://github.com/hughhan1/mysql",
     "source": "github"
   }
 }
